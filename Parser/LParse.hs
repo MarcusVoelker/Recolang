@@ -86,3 +86,6 @@ consume pre = cParse (pre `isPrefixOf`) (pParse (drop (length pre)) noopParse) (
 
 eatWhitespace :: Parser r ()
 eatWhitespace = noopParse <.const.> star (consume " ")
+
+wConsume :: String -> Parser r()
+wConsume s = eatWhitespace <.const.> consume s <.const.> eatWhitespace

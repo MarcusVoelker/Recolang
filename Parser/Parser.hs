@@ -58,7 +58,7 @@ parseConstType :: Parser r Type
 parseConstType = fmap ConstType $ dPrefixParse "const<" parseType <.const.> consume ">"
 
 parseSignature :: Parser r Signature
-parseSignature = parseName <. Signature .> (eatWhitespace <.const.> consume "::" <.const.> eatWhitespace) <. const id .> parseType
+parseSignature = parseName <. Signature .> wConsume "::" <. const id .> parseType
 
 parseInterface :: Parser r Interface
 parseInterface =
@@ -76,7 +76,7 @@ parseStatement :: Parser r Statement
 parseStatement = parseVarDefinition <|> parseVar
 
 parseVarDefinition :: Parser r Statement
-parseVarDefinition = (parseName <.const.> eatWhitespace <.const.> consume ":=" <.const.> eatWhitespace) <. VarDefinition .> parseStatement 
+parseVarDefinition = (parseName <.const.> wConsume ":=") <. VarDefinition .> parseStatement 
 
 parseVar :: Parser r Statement
 parseVar = fmap Var parseName
