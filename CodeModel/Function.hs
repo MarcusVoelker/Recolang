@@ -2,9 +2,24 @@ module CodeModel.Function where
 
 import CodeModel.Signature
 
-data Function = Function Signature [Statement]
+data Function = Function Signature Block
 
-data Statement = VarDefinition String Statement | Var String
+type Block = [Statement]
+
+data Statement = VarDefinition String Statement
+               | Var String
+               | IntLiteral Int
+               | StringLiteral String
+               | CharLiteral Char
+               | FloatLiteral Double
+               | ArrayLiteral [Statement]
+               | MapLiteral [(Statement,Statement)]
+               | TupleLiteral [Statement]
+               | For Statement Statement Statement Block
+               | RangeFor String Statement Block
+               | While Statement Block
+               | If Statement Block Block
+               | DoWhile Statement Block
 
 instance Show Function where
 	show (Function sig body) = "    " ++ show sig ++ "\n" ++ unlines (map (\s -> "        "++ show s) body)
