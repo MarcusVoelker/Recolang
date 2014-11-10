@@ -5,6 +5,7 @@ import Parser.Continuations
 import Control.Applicative
 import Control.Arrow
 import Control.Monad
+import Data.Either
 import Data.List
 
 data Parser r a = Parser {pFunc :: String -> DCont r String (a,String)}
@@ -72,13 +73,30 @@ charParse f = Parser (\s -> DCont (\btr _ -> btr (f $ head s,tail s)))
 consume :: String -> Parser r ()
 consume pre = cParse (pre `isPrefixOf`) (pParse (drop (length pre)) noopParse) ("Expected \"" ++ pre ++ "\"")
 
-eatWhitespace :: Parser r ()
-eatWhitespace = noopParse <.const.> many (consume " ")
+eatLineWhitespace :: Parser r ()
+eatLineWhitespace = noopParse <.const.> many (consume " ")
 
 wConsume :: String -> Parser r()
-wConsume s = eatWhitespace <.const.> consume s <.const.> eatWhitespace
+wConsume s = eatLineWhitespace <.const.> consume s <.const.> eatLineWhitespace
 
 sepMany :: String -> Parser r a -> Parser r [a]
 sepMany s p = (p <.(:).> many (wConsume s <.const id.> p)) <|> (fmap return p) <|> (return [])
 
+parseEither :: Parser r a -> Parser r b -> Parser r (Either a b)
+parseEither pa pb = do
+    a <- optional pa
+    case a of
+        Nothing -> Right <$> pb
+        (Just a') -> return $ Left a'
 
+eatWhitespace :: Parser r ()
+eatWhitespace = noopParse << many (consume " " <|> consume "\n")
+
+parseEitherList :: Parser r a -> Parser r b -> Parser r ([a],[b])
+parseEitherList pa pb = partitionEithers <$> (many $ parseEither pa pb)
+
+parseWEitherList :: Parser r a -> Parser r b -> Parser r ([a],[b])
+parseWEitherList pa pb = partitionEithers <$> (many $ (many parseEmptyLine >> parseEither pa pb))
+
+parseEmptyLine :: Parser r ()
+parseEmptyLine = (many (consume " ")) >> consume "\n"
