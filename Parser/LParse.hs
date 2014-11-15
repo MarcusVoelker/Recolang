@@ -1,6 +1,6 @@
 module Parser.LParse where
 
-import Parser.Continuations
+import Continuations
 
 import Control.Applicative
 import Control.Arrow
@@ -8,95 +8,105 @@ import Control.Monad
 import Data.Either
 import Data.List
 
-data Parser r a = Parser {pFunc :: String -> DCont r String (a,String)}
+import Utils
 
-instance Functor (Parser r) where
+data Parser r t a = Parser {pFunc :: [t] -> DCont r String (a,[t])}
+
+instance Functor (Parser r t) where
     fmap f p = Parser (fmap (first f) . pFunc p)
 
-instance Applicative (Parser r) where
+instance Applicative (Parser r t) where
     pure = return
-    f <*> a = f >>= (\ff -> fmap ff a)
+    f <*> a = f >>= (<$> a)
 
-instance Alternative (Parser r) where
+instance Alternative (Parser r t) where
     empty = pFail "Empty Fail"
     p1 <|> p2 = Parser (\s -> branch (pFunc p1 s) (pFunc p2 s))
 
-instance Monad (Parser r) where
+instance Monad (Parser r t) where
 	return = constParse 
 	a >>= f = Parser (pFunc a >=> (\ (r, s') -> pFunc (f r) s'))
 
 (<<) :: (Monad m) => m a -> m b -> m a
 a << b = a >>= (\x -> b >> return x)
 
-parse :: Parser r a -> String -> (a -> r) -> (String -> r) -> r
+parse :: Parser r t a -> [t] -> (a -> r) -> (String -> r) -> r
 parse p s btr = run (pFunc p s) (btr . fst)
 
-debugParse :: (Show a) => Parser (IO ()) a -> String -> IO ()
+debugParse :: (Show a) => Parser (IO ()) t a -> [t] -> IO ()
 debugParse p s = run (pFunc p s) (putStr . (\x -> show (fst x) ++ "\n")) (\e -> putStr ("Error: "++ e ++ "\n"))
 
 infixl 1 <.
 infixr 0 .>
 
-constParse :: a -> Parser r a
+constParse :: a -> Parser r t a
 constParse a = Parser (\s -> return (a,s))
 
-dot :: Parser r a -> (a -> b -> c) -> Parser r b  -> Parser r c
+dot :: Parser r t a -> (a -> b -> c) -> Parser r t b  -> Parser r t c
 dot pa f pb = Parser (pFunc pa >=> (\(a,r) -> fmap (first (f a)) (pFunc pb r)))
 
 (<.) :: a -> b -> (a,b)
 (<.) = (,)
 
-(.>) :: (Parser r a, a -> b -> c) -> Parser r b -> Parser r c
+(.>) :: (Parser r t a, a -> b -> c) -> Parser r t b -> Parser r t c
 (.>) = uncurry dot
 
-cParse :: (String -> Bool) -> Parser r a -> String -> Parser r a
+cParse :: ([t] -> Bool) -> Parser r t a -> String -> Parser r t a
 cParse c p err = Parser (\s -> if c s then pFunc p s else throw err)
 
-prefixParse :: String -> Parser r a -> Parser r a
-prefixParse pre p = Parser (\s -> if pre `isPrefixOf` s then pFunc p s else throw ("Expected " ++ pre))
+prefixParse :: (Eq t, Show t) => [t] -> Parser r t a -> Parser r t a
+prefixParse pre p = Parser (\s -> if pre `isPrefixOf` s then pFunc p s else throw ("Expected " ++ show pre))
 
-dPrefixParse :: String -> Parser r a -> Parser r a
+dPrefixParse :: (Eq t, Show t) => [t] -> Parser r t a -> Parser r t a
 dPrefixParse pre p = prefixParse pre (pParse (drop (length pre)) p)
 
-pParse :: (String -> String) -> Parser r a -> Parser r a
+pParse :: ([t] -> [t]) -> Parser r t a -> Parser r t a
 pParse f p = Parser (pFunc p . f)
 
-pFail :: String -> Parser r a
+pFail :: String -> Parser r t a
 pFail err = Parser (const $ throw err)
 
-noopParse :: Parser r ()
+noopParse :: Parser r t ()
 noopParse = Parser (\s -> DCont (\btr _ -> btr ((),s)))
 
-charParse :: (Char -> a) -> Parser r a
-charParse f = Parser (\s -> DCont (\btr _ -> btr (f $ head s,tail s)))
+tokenParse :: (t -> a) -> Parser r t a
+tokenParse f = Parser (\s -> DCont (\btr _ -> btr (f $ head s,tail s)))
 
-consume :: String -> Parser r ()
-consume pre = cParse (pre `isPrefixOf`) (pParse (drop (length pre)) noopParse) ("Expected \"" ++ pre ++ "\"")
+consume :: (Eq t, Show t) => [t] -> Parser r t ()
+consume pre = cParse (pre `isPrefixOf`) (pParse (drop (length pre)) noopParse) ("Expected " ++ show pre)
 
-eatLineWhitespace :: Parser r ()
-eatLineWhitespace = noopParse <.const.> many (consume " ")
+consumeSingle :: (Eq t, Show t) => t -> Parser r t ()
+consumeSingle t = cParse (\s -> not (null s) && head s == t) (pParse tail noopParse) ("Expected " ++ show t)
 
-wConsume :: String -> Parser r()
-wConsume s = eatLineWhitespace <.const.> consume s <.const.> eatLineWhitespace
+peek :: (Eq t, Show t) => [t] -> Parser r t ()
+peek pre = cParse (pre `isPrefixOf`) noopParse ("Expected " ++ show pre)
 
-sepMany :: String -> Parser r a -> Parser r [a]
-sepMany s p = (p <.(:).> many (wConsume s <.const id.> p)) <|> (fmap return p) <|> (return [])
+cPeek :: (Eq t, Show t) => ([t] -> Bool) -> Parser r t ()
+cPeek cond = cParse cond noopParse "Expected match"
 
-parseEither :: Parser r a -> Parser r b -> Parser r (Either a b)
+sepMany :: Parser r t () -> Parser r t a -> Parser r t [a]
+sepMany sep p = (p <.(:).> many (sep >> p)) <|> fmap return p <|> return []
+
+parseEither :: Parser r t a -> Parser r t b -> Parser r t (Either a b)
 parseEither pa pb = do
     a <- optional pa
     case a of
         Nothing -> Right <$> pb
         (Just a') -> return $ Left a'
 
-eatWhitespace :: Parser r ()
-eatWhitespace = noopParse << many (consume " " <|> consume "\n")
+parseEitherList :: Parser r t a -> Parser r t b -> Parser r t ([a],[b])
+parseEitherList pa pb = partitionEithers <$> many (parseEither pa pb)
 
-parseEitherList :: Parser r a -> Parser r b -> Parser r ([a],[b])
-parseEitherList pa pb = partitionEithers <$> (many $ parseEither pa pb)
+parseTEither :: Parser r t a -> Parser r t b -> Parser r t c -> Parser r t (TEither a b c)
+parseTEither pa pb pc = do
+    a <- optional pa
+    case a of
+        Nothing -> do 
+            b <- optional pb
+            case b of
+            	Nothing -> T3 <$> pc
+            	(Just b') -> return $ T2 b'
+        (Just a') -> return $ T1 a'
 
-parseWEitherList :: Parser r a -> Parser r b -> Parser r ([a],[b])
-parseWEitherList pa pb = partitionEithers <$> (many $ (many parseEmptyLine >> parseEither pa pb))
-
-parseEmptyLine :: Parser r ()
-parseEmptyLine = (many (consume " ")) >> consume "\n"
+parseTEitherList :: Parser r t a -> Parser r t b -> Parser r t c -> Parser r t ([a],[b],[c])
+parseTEitherList pa pb pc = partitionTEithers <$> many (parseTEither pa pb pc)

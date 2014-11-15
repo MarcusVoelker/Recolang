@@ -1,0 +1,22 @@
+module Test
+
+trait Movable
+   move :: T
+
+trait Copyable
+   copy :: T
+
+interface Object : Copyable, Movable
+   toHeap :: unique<Object>
+
+core Object
+   toHeap :: unique<Object>
+      uo := makeptr(Object)
+      uo <- this
+      return uo
+
+core Main
+   main :: ()
+      v := 1
+      t := v + 1
+      print v

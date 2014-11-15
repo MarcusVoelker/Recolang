@@ -1,5 +1,6 @@
-module Parser.Continuations where
+module Continuations where
 
+import Control.Applicative
 import Control.Monad
 
 data DCont r e a = DCont {run :: (a -> r) -> (e -> r) -> r}
@@ -28,3 +29,11 @@ instance Monad (DCont r e) where
 
 instance Functor (DCont r e) where
     fmap = liftM
+
+instance Applicative (DCont r e) where
+	pure = return
+	f <*> a = f >>= (<$> a)
+
+instance Alternative (DCont r e) where
+	empty = DCont (\_ g -> g undefined)
+	p1 <|> p2 = branch p1 p2

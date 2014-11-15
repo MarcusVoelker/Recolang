@@ -1,11 +1,11 @@
-module Parser.Parser where
+module Parser.Parser  where
 
 import Control.Applicative
-import Data.Char
 import Data.Maybe
 
-import Utils
 import Parser.LParse
+import qualified Parser.Lexer as Lexer
+
 import CodeModel.Core
 import CodeModel.Function
 import CodeModel.Interface
@@ -13,147 +13,174 @@ import CodeModel.Module
 import CodeModel.Signature
 import CodeModel.Type
 
-parseName :: Parser r String
-parseName = some $ cParse (\s -> not (null s) && isLetter (head s)) (charParse id) "Expected Name"
+type TParser r t = Parser r Lexer.Token t
 
-parseType :: Parser r Type
-parseType = eatLineWhitespace >> (parseFunctionType <|> parseNonFuncType) << eatLineWhitespace
+consumeOp :: String -> TParser t ()
+consumeOp s = consumeSingle (Lexer.Operator s)
 
-parseNonFuncType :: Parser r Type
-parseNonFuncType = eatLineWhitespace >> (parseListType <|> parseMapType <|> parseTupleType <|> parseParens <|> parsePointerType <|> parseConstType <|> parseUserDefinedType) << eatLineWhitespace
+consumeSOp :: Lexer.SpecialOperator -> TParser t ()
+consumeSOp o = consumeSingle (Lexer.SpecialOperator o)
 
-parseFunctionType :: Parser r Type
-parseFunctionType = FunctionType <$> parseParameter <*> (consume "->" >> parseType)
+consumeKw :: Lexer.Keyword -> TParser t ()
+consumeKw s = consumeSingle (Lexer.Keyword s)
 
-parseParameter :: Parser r Parameter
-parseParameter = (NamedParam <$> parseNonFuncType <*> parseName << eatLineWhitespace) <|> Param <$> parseNonFuncType
+consumeInd :: Int -> TParser t ()
+consumeInd i = consumeSingle (Lexer.Indentation i)
 
-parseParens :: Parser r Type
-parseParens = dPrefixParse "(" parseType << consume ")"
+consumeNewlines :: TParser t ()
+consumeNewlines = many (consumeSingle (Lexer.Indentation 0)) >> noopParse
 
-parseUserDefinedType :: Parser r Type
-parseUserDefinedType = UserDefined <$> parseName
+identifier :: TParser r String
+identifier = (\(Lexer.Identifier i) -> i) <$> cParse (Lexer.isIdentifier . head) (tokenParse id) ""
 
-parseListType :: Parser r Type
-parseListType = ListType <$> dPrefixParse "[" (parseType << remCB)
-    where remCB = wConsume "]"
+operator :: TParser r String
+operator = (\(Lexer.Operator o) -> o) <$> cParse (Lexer.isOperator . head) (tokenParse id) ""
 
-parseTupleType :: Parser r Type
-parseTupleType = TupleType <$> dPrefixParse "(" (((parseType <.(:).> some (wConsume "," >> parseType)) <|> empty) << remCB)
-    where remCB = wConsume ")"
+int :: TParser r Integer
+int = (\(Lexer.Integer i) -> i) <$> cParse (Lexer.isInteger . head) (tokenParse id) ""
 
-parseMapType :: Parser r Type
-parseMapType = dPrefixParse "{" (MapType <$> parseType <*> (remComma >> parseType << remCB))
-    where remCB = wConsume "}"
-          remComma = wConsume ","
+char :: TParser r Char
+char = (\(Lexer.Char c) -> c) <$> cParse (Lexer.isChar . head) (tokenParse id) ""
 
-parsePointerType :: Parser r Type
+string :: TParser r String
+string = (\(Lexer.String c) -> c) <$> cParse (Lexer.isString . head) (tokenParse id) ""
+
+float :: TParser r Double
+float = (\(Lexer.Float f) -> f) <$> cParse (Lexer.isFloat . head) (tokenParse id) ""
+
+parseType :: TParser r Type
+parseType = parseFunctionType <|> parseNonFuncType
+
+parseNonFuncType :: TParser r Type
+parseNonFuncType = parseListType <|> parseMapType <|> parseTupleType <|> parseParens <|> parsePointerType <|> parseConstType <|> parseUserDefinedType
+
+parseFunctionType :: TParser r Type
+parseFunctionType = FunctionType <$> parseParameter <*> (consumeOp "->" >> parseType)
+
+parseParameter :: TParser r Parameter
+parseParameter = (NamedParam <$> parseNonFuncType <*> identifier) <|> Param <$> parseNonFuncType
+
+parseParens :: TParser r Type
+parseParens = consumeSOp Lexer.LParen >> parseType << consumeSOp Lexer.RParen
+
+parseUserDefinedType :: TParser r Type
+parseUserDefinedType = UserDefined <$> identifier
+
+parseListType :: TParser r Type
+parseListType = ListType <$> (consumeOp "[" >> parseType << consumeOp "]")
+
+parseTupleType :: TParser r Type
+parseTupleType = TupleType <$> (consumeSOp Lexer.LParen >> sepMany (consumeOp ",") parseType << consumeSOp Lexer.RParen)
+
+parseMapType :: TParser r Type
+parseMapType = consumeOp "{" >> (MapType <$> parseType <*> (consumeOp "," >> parseType << consumeOp "}"))
+
+parsePointerType :: TParser r Type
 parsePointerType = parseSharedType <|> parseUniqueType <|> parseViewType
 
-parseSharedType :: Parser r Type
-parseSharedType = PointerType Shared <$> dPrefixParse "shared<" parseType << consume ">"
+parseSharedType :: TParser r Type
+parseSharedType = PointerType Shared <$> (consumeKw Lexer.Shared >> consumeOp "<"  >> parseType << consumeOp ">")
 
-parseUniqueType :: Parser r Type
-parseUniqueType = PointerType Unique <$> dPrefixParse "unique<" parseType << consume ">"
+parseUniqueType :: TParser r Type
+parseUniqueType = PointerType Unique <$> (consumeKw Lexer.Unique >> consumeOp "<"  >> parseType << consumeOp ">")
 
-parseViewType :: Parser r Type
-parseViewType = PointerType View <$> dPrefixParse "view<" parseType << consume ">"
+parseViewType :: TParser r Type
+parseViewType = PointerType View <$> (consumeKw Lexer.View >> consumeOp "<"  >> parseType << consumeOp ">")
 
-parseConstType :: Parser r Type
-parseConstType = ConstType <$> dPrefixParse "const<" parseType << consume ">"
+parseConstType :: TParser r Type
+parseConstType = ConstType <$> (consumeKw Lexer.Const >> consumeOp "<"  >> parseType << consumeOp ">")
 
-parseSignature :: Parser r Signature
-parseSignature = Signature <$> parseName <*> (wConsume "::" >> parseType)
+parseSignature :: TParser r Signature
+parseSignature = Signature <$> identifier <*> (consumeOp "::" >> parseType)
 
-parseInterface :: Parser r Interface
+parseInd :: TParser r Int
+parseInd = cParse (\t -> case head t of (Lexer.Indentation _) -> True; _ -> False) (tokenParse (\(Lexer.Indentation i) -> i)) "Expected Indentation" 
+
+parseBlock :: TParser r a -> TParser r [a]
+parseBlock p = parseInd >>= (\ind -> p <.(:).> parseBlockRest ind)
+	where parseBlockRest ind = (consumeInd ind >> (p <.(:).> parseBlockRest ind)) <|> constParse []
+
+parseFunction :: TParser r Function
+parseFunction = Function <$> parseSignature <*> parseBlock parseStatement
+
+parseStatementT :: TParser r Statement
+parseStatementT = parseReturn <|> parseIfE <|> parseIf <|> parseWhile <|> parseFor <|> parseMapLiteral <|> parseTupleLiteral <|> parseArrayLiteral <|> parseCharLiteral <|> parseStringLiteral <|> parseTemplatedIdentifier <|> parseIdentifier <|> parseFloatLiteral <|> parseIntLiteral
+
+parseStatement :: TParser r Statement
+parseStatement = (Call <$> parseStatementT <*> parseStatement) <|> ((\s1 o s2 -> Operator o s1 s2) <$> parseStatementT <*> operator <*> parseStatement) <|> parseStatementT
+
+parseTemplatedIdentifier :: TParser r Statement
+parseTemplatedIdentifier = TemplatedIdentifier <$> identifier <*> (consumeSOp Lexer.LParen >> parseStatement << consumeSOp Lexer.RParen)
+
+parseIdentifier :: TParser r Statement
+parseIdentifier = Identifier <$> identifier
+
+parseIntLiteral :: TParser r Statement
+parseIntLiteral = IntLiteral <$> int
+
+parseCharLiteral :: TParser r Statement
+parseCharLiteral = CharLiteral <$> char
+
+parseStringLiteral :: TParser r Statement
+parseStringLiteral = StringLiteral <$> string
+
+parseFloatLiteral :: TParser r Statement
+parseFloatLiteral = FloatLiteral <$> float
+
+parseArrayLiteral :: TParser r Statement
+parseArrayLiteral = consumeOp "[" >> (ArrayLiteral <$> sepMany (consumeOp ",") parseStatement) << consumeOp "]"
+
+parseTupleLiteral :: TParser r Statement
+parseTupleLiteral = consumeSOp Lexer.LParen >> (TupleLiteral <$> sepMany (consumeOp ",") parseStatement) << consumeSOp Lexer.RParen
+
+parseMapLiteralEntry :: TParser r (Statement,Statement)
+parseMapLiteralEntry = consumeSOp Lexer.LParen >> (parseStatement << consumeOp ",") <.(,).> parseStatement << consumeSOp Lexer.RParen
+
+parseMapLiteral :: TParser r Statement
+parseMapLiteral = consumeOp "{" >> (MapLiteral <$> sepMany (consumeOp ",") parseMapLiteralEntry) << consumeOp "}"
+
+parseFor :: TParser r Statement
+parseFor = consumeKw Lexer.For >> For <$> identifier <*> (consumeOp "<-" >> parseStatement) <*> parseBlock parseStatement
+
+parseWhile :: TParser r Statement
+parseWhile = consumeKw Lexer.While >> While <$> parseStatement <*> parseBlock parseStatement
+
+parseIf :: TParser r Statement
+parseIf = consumeKw Lexer.If >> If <$> parseStatement <*> parseBlock parseStatement
+
+parseIfE :: TParser r Statement
+parseIfE = consumeKw Lexer.If >> IfE <$> parseStatement <*> parseBlock parseStatement <*> (consumeKw Lexer.Else >> parseBlock parseStatement)
+
+parseReturn :: TParser r Statement
+parseReturn = consumeKw Lexer.Return >> Return <$> parseStatement
+
+parseInterface :: TParser r Interface
 parseInterface =
-	(consume "interface" << eatLineWhitespace) >>
-	Interface <$> parseName <*> (consume "\n" >> ((fromMaybe []) <$> optional (parseBlock parseSignature)))
+	consumeKw Lexer.Interface >>
+	Interface <$> identifier <*> (fromMaybe [] <$> optional (consumeOp ":" >> sepMany (consumeOp ",") identifier)) <*> (fromMaybe [] <$> optional (parseBlock parseSignature)) << consumeNewlines
 
-parseBlock :: Parser r a -> Parser r [a]
-parseBlock p = (map (const ' ')) <$> (many $ consume " ") >>= parseBlockRest
-	where parseBlockRest s = p <.(:).> ((consume "\n" >> consume s >> parseBlockRest s) <|> pure [])
+parseCore :: TParser r Core
+parseCore = consumeKw Lexer.Core >> Core <$> identifier <*> parseBlock parseFunction << consumeNewlines
 
-parseFunction :: Parser r Function
-parseFunction = Function <$> parseSignature <*> (consume "\n" >> parseBlock parseStatement)
+parseTrait:: TParser r Trait
+parseTrait =
+	consumeKw Lexer.Trait >>
+	Trait <$> identifier <*> (fromMaybe [] <$> optional (consumeOp ":" >> sepMany (consumeOp ",") identifier)) <*> (fromMaybe [] <$> optional (parseBlock parseSignature)) << consumeNewlines
 
-parseStatementT :: Parser r Statement
-parseStatementT = parseIfE <|> parseIf <|> parseWhile <|> parseFor <|> parseMapLiteral <|> parseTupleLiteral <|> parseArrayLiteral <|> parseCharLiteral <|> parseStringLiteral <|> parseVarDefinition <|> parseVar <|> parseFloatLiteral <|> parseIntLiteral
+parseImport :: TParser r Import
+parseImport = consumeKw Lexer.Import >> Import <$> identifier << consumeNewlines
 
-parseStatement :: Parser r Statement
-parseStatement = (Assignment <$> parseStatementT <*> (wConsume "=" >> parseStatement)) <|> parseStatementT
+parseClasses :: TParser r ([Interface],[Core],[Trait])
+parseClasses = parseTEitherList parseInterface parseCore parseTrait
 
-parseVarDefinition :: Parser r Statement
-parseVarDefinition = VarDefinition <$> (parseName << wConsume ":=") <*> parseStatement
-
-parseVar :: Parser r Statement
-parseVar = Var <$> parseName
-
-parseDigit :: Parser r Char
-parseDigit = cParse (\s -> not (null s) && isDigit (head s)) (charParse id) "Expected Digit"
-
-parseIntLiteral :: Parser r Statement
-parseIntLiteral = (IntLiteral . read) <$>  some parseDigit
-
-parseEscapedChar :: Parser r Char
-parseEscapedChar = consume "\\" >> charParse escape
-
-parseChar :: Parser r Char
-parseChar = parseEscapedChar <|> charParse id
-
-parseStringLiteral :: Parser r Statement
-parseStringLiteral = consume "\"" >> (StringLiteral <$> (many (cParse (/= "\"") parseChar ""))) << consume "\""
-
-parseCharLiteral :: Parser r Statement
-parseCharLiteral = consume "'" >> CharLiteral <$> parseChar << consume "'"
-
-parseFDigit :: Parser r Char
-parseFDigit = cParse (\s -> not (null s) && ((head s == '.') || isDigit (head s))) (charParse id) "Expected Digit or '.'"
-
-parseFloatLiteral :: Parser r Statement
-parseFloatLiteral = (FloatLiteral . read) <$> cParse ('.' `elem`) (some parseFDigit) "Expected '.' in float literal"
-
-parseArrayLiteral :: Parser r Statement
-parseArrayLiteral = wConsume "[" >> (ArrayLiteral <$> (sepMany "," parseStatement)) << wConsume "]"
-
-parseTupleLiteral :: Parser r Statement
-parseTupleLiteral = wConsume "(" >> (TupleLiteral <$> (sepMany "," parseStatement)) << wConsume ")"
-
-parseMapLiteralEntry :: Parser r (Statement,Statement)
-parseMapLiteralEntry = wConsume "(" >> (parseStatement << wConsume ",") <.(,).> parseStatement << wConsume ")"
-
-parseMapLiteral :: Parser r Statement
-parseMapLiteral = wConsume "{" >> (MapLiteral <$> sepMany "," parseMapLiteralEntry) << wConsume "}"
-
-parseFor :: Parser r Statement
-parseFor = wConsume "for" >> For <$> parseName <*> (wConsume "<-" >> parseStatement) <*> (eatLineWhitespace >> consume "\n" >> parseBlock parseStatement)
-
-parseWhile :: Parser r Statement
-parseWhile = wConsume "while" >> While <$> parseStatement <*> (eatLineWhitespace >> consume "\n" >> parseBlock parseStatement)
-
-parseIf :: Parser r Statement
-parseIf = wConsume "if" >> If <$> parseStatement <*> (eatLineWhitespace >> consume "\n" >> parseBlock parseStatement)
-
-parseIfE :: Parser r Statement
-parseIfE = wConsume "if" >> IfE <$> parseStatement <*> (eatLineWhitespace >> consume "\n" >> parseBlock parseStatement) <*> (wConsume "else" >> eatLineWhitespace >> consume "\n" >> parseBlock parseStatement)
-
-parseCore :: Parser r Core
-parseCore =
-	(consume "core" << eatLineWhitespace) >>
-	Core <$> parseName <*> (consume "\n" >> parseBlock parseFunction)
-
-parseImport :: Parser r Import
-parseImport = consume "import " >> eatLineWhitespace >> Import <$> parseName << eatLineWhitespace << consume "\n"
-
-parseClasses :: Parser r ([Interface],[Core])
-parseClasses = parseWEitherList parseInterface parseCore
-
-parseModule :: Parser r Module
+parseModule :: TParser r Module
 parseModule = do
-    consume "module"
-    eatLineWhitespace
-    n <- parseName
-    eatWhitespace
-    imps <- many (parseImport << (many $ wConsume "\n"))
-    (ints,cs) <- parseClasses
-    return $ Module n imps ints cs
+    consumeKw Lexer.Module
+    n <- identifier
+    consumeNewlines
+    imps <- many parseImport
+    (ints,cs,ts) <- parseClasses
+    return $ Module n imps ints cs ts
+
+parseFile :: String -> Maybe Module
+parseFile s = parse Lexer.tokenizer (s ++ "\n") (\ts -> parse parseModule ts Just (const Nothing)) (const Nothing)
