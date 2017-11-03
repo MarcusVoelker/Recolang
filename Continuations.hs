@@ -2,6 +2,8 @@ module Continuations where
 
 import Control.Applicative
 import Control.Monad
+import Control.Arrow
+import Control.Category
 
 data DCont r e a = DCont {run :: (a -> r) -> (e -> r) -> r}
 
@@ -31,9 +33,35 @@ instance Functor (DCont r e) where
     fmap = liftM
 
 instance Applicative (DCont r e) where
-	pure = return
-	f <*> a = f >>= (<$> a)
+    pure = return
+    f <*> a = f >>= (<$> a)
 
 instance Alternative (DCont r e) where
-	empty = DCont (\_ g -> g undefined)
-	p1 <|> p2 = branch p1 p2
+    empty = DCont (\_ g -> g undefined)
+    p1 <|> p2 = branch p1 p2
+
+
+data DContFunc r e i a = DContFunc {execute :: i -> (a -> r) -> (e -> r) -> r}
+
+instance Category (DContFunc r e) where
+    id = DContFunc (\i atr _ -> atr i)
+    bc . ab = DContFunc (\a ctr etr -> execute ab a (\b -> execute bc b ctr etr) etr)
+
+instance Arrow (DContFunc r e) where
+    arr f = DContFunc (\i atr _ -> atr $ f i)
+    first ab = DContFunc (\(a,c) bctr etr -> execute ab a (\b -> bctr (b,c)) etr)
+
+instance Monad (DContFunc r e i) where
+    return a = DContFunc (\_ itr _ -> itr a)
+    dcfa >>= f = DContFunc (\i btr etr -> execute dcfa i (\a -> execute (f a) i btr etr) etr) 
+
+instance Functor (DContFunc r e i) where
+    fmap = liftM
+
+instance Applicative (DContFunc r e i) where
+    pure = return
+    f <*> a = f >>= (<$> a)
+
+instance Alternative (DContFunc r e i) where
+    empty = DContFunc (\_ _ g -> g undefined)
+    p1 <|> p2 = DContFunc (\i ctr etr -> execute p1 i ctr (\_ -> execute p2 i ctr etr))

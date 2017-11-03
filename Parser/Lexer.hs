@@ -7,7 +7,9 @@ import Data.Char
 import Data.DeriveTH
 
 import Utils
-import Parser.LParse
+import Text.LParse.Parser
+import Text.LParse.Atomics
+import Text.LParse.Transformers
 
 data Keyword = Module | Import | Interface | Core | Trait | Return | Shared | Unique | View | Const | For | While | If | Else deriving (Eq, Show)
 data SpecialOperator = LParen | RParen deriving (Eq, Show)
@@ -49,10 +51,10 @@ tokenizeOperator = Operator <$> some (cParse (\s -> not (null s) && (head s `ele
 
 tokenizeSpecialOperator :: STokenizer r
 tokenizeSpecialOperator = (const (SpecialOperator LParen) <$> consume "(") 
-	                  <|> (const (SpecialOperator RParen) <$> consume ")") 
+                      <|> (const (SpecialOperator RParen) <$> consume ")") 
 
 tokenizeIndentation :: STokenizer r
-tokenizeIndentation = Indentation . length <$> (consume "\n" >> many (consume " ") << cPeek (/= "\n")) 
+tokenizeIndentation = Indentation . length <$> (consume "\n" >> many (consume " " <|> consume "\t") << cPeek (/= "\n")) 
 
 tokenizeKeyword :: STokenizer r
 tokenizeKeyword = (const (Keyword Module) <$> consume "module") 
@@ -70,6 +72,6 @@ tokenizerStep :: STokenizer r
 tokenizerStep = tokenizeInteger <|> tokenizeString <|> tokenizeChar <|> tokenizeFloat <|> tokenizeOperator <|> tokenizeSpecialOperator <|> tokenizeIndentation <|> tokenizeKeyword <|> tokenizeIdentifier <|> (consume " " >> tokenizerStep)
 
 tokenizer :: Tokenizer r
-tokenizer = step tokenizerStep tokenizer <|> constParse []
+tokenizer = many tokenizerStep
 
 $(derive makeIs ''Token)

@@ -1,9 +1,13 @@
 module Parser.Parser  where
 
 import Control.Applicative
+import Data.List
 import Data.Maybe
 
-import Parser.LParse
+import Text.LParse.Parser
+import Text.LParse.Atomics
+import Text.LParse.Transformers
+
 import qualified Parser.Lexer as Lexer
 
 import CodeModel.Core
@@ -15,8 +19,14 @@ import CodeModel.Type
 
 type TParser r t = Parser r Lexer.Token t
 
+consumePartialOp :: String -> TParser t ()
+consumePartialOp s = cParse 
+    (\ts -> case ts of ((Lexer.Operator o):_) -> isPrefixOf s o && length s < length o;_->False) 
+    (replace (\(Lexer.Operator o) -> Lexer.Operator (drop (length s) o)) noop) 
+    ("Expected Op starting with " ++ s)
+
 consumeOp :: String -> TParser t ()
-consumeOp s = consumeSingle (Lexer.Operator s)
+consumeOp s = consumeSingle (Lexer.Operator s) <|> consumePartialOp s
 
 consumeSOp :: Lexer.SpecialOperator -> TParser t ()
 consumeSOp o = consumeSingle (Lexer.SpecialOperator o)
@@ -28,7 +38,7 @@ consumeInd :: Int -> TParser t ()
 consumeInd i = consumeSingle (Lexer.Indentation i)
 
 consumeNewlines :: TParser t ()
-consumeNewlines = many (consumeSingle (Lexer.Indentation 0)) >> noopParse
+consumeNewlines = many (consumeSingle (Lexer.Indentation 0)) >> noop
 
 identifier :: TParser r String
 identifier = (\(Lexer.Identifier i) -> i) <$> cParse (Lexer.isIdentifier . head) (tokenParse id) ""
@@ -97,8 +107,8 @@ parseInd :: TParser r Int
 parseInd = cParse (\t -> case head t of (Lexer.Indentation _) -> True; _ -> False) (tokenParse (\(Lexer.Indentation i) -> i)) "Expected Indentation" 
 
 parseBlock :: TParser r a -> TParser r [a]
-parseBlock p = parseInd >>= (\ind -> p <.(:).> parseBlockRest ind)
-	where parseBlockRest ind = (consumeInd ind >> (p <.(:).> parseBlockRest ind)) <|> constParse []
+parseBlock p = parseInd >>= (\ind -> (:) <$> p <*> parseBlockRest ind)
+    where parseBlockRest ind = (consumeInd ind >> ((:) <$> p <*> parseBlockRest ind)) <|> return []
 
 parseFunction :: TParser r Function
 parseFunction = Function <$> parseSignature <*> parseBlock parseStatement
@@ -134,7 +144,7 @@ parseTupleLiteral :: TParser r Statement
 parseTupleLiteral = consumeSOp Lexer.LParen >> (TupleLiteral <$> sepMany (consumeOp ",") parseStatement) << consumeSOp Lexer.RParen
 
 parseMapLiteralEntry :: TParser r (Statement,Statement)
-parseMapLiteralEntry = consumeSOp Lexer.LParen >> (parseStatement << consumeOp ",") <.(,).> parseStatement << consumeSOp Lexer.RParen
+parseMapLiteralEntry = consumeSOp Lexer.LParen >> ((,) <$> (parseStatement << consumeOp ",") <*> parseStatement) << consumeSOp Lexer.RParen
 
 parseMapLiteral :: TParser r Statement
 parseMapLiteral = consumeOp "{" >> (MapLiteral <$> sepMany (consumeOp ",") parseMapLiteralEntry) << consumeOp "}"
@@ -156,22 +166,25 @@ parseReturn = consumeKw Lexer.Return >> Return <$> parseStatement
 
 parseInterface :: TParser r Interface
 parseInterface =
-	consumeKw Lexer.Interface >>
-	Interface <$> identifier <*> (fromMaybe [] <$> optional (consumeOp ":" >> sepMany (consumeOp ",") identifier)) <*> (fromMaybe [] <$> optional (parseBlock parseSignature)) << consumeNewlines
+    consumeKw Lexer.Interface >>
+    Interface <$> identifier <*> (fromMaybe [] <$> optional (consumeOp ":" >> sepMany (consumeOp ",") identifier)) <*> (fromMaybe [] <$> optional (parseBlock parseSignature)) << consumeNewlines
 
 parseCore :: TParser r Core
 parseCore = consumeKw Lexer.Core >> Core <$> identifier <*> parseBlock parseFunction << consumeNewlines
 
 parseTrait:: TParser r Trait
 parseTrait =
-	consumeKw Lexer.Trait >>
-	Trait <$> identifier <*> (fromMaybe [] <$> optional (consumeOp ":" >> sepMany (consumeOp ",") identifier)) <*> (fromMaybe [] <$> optional (parseBlock parseSignature)) << consumeNewlines
+    consumeKw Lexer.Trait >>
+    Trait <$> identifier <*> (fromMaybe [] <$> optional (consumeOp ":" >> sepMany (consumeOp ",") identifier)) <*> (fromMaybe [] <$> optional (parseBlock parseSignature)) << consumeNewlines
 
 parseImport :: TParser r Import
 parseImport = consumeKw Lexer.Import >> Import <$> identifier << consumeNewlines
 
+parseClass :: TParser r ([Interface],[Core],[Trait])
+parseClass = ((\i -> ([i],[],[])) <$> parseInterface) <|> ((\c -> ([],[c],[])) <$> parseCore) <|> ((\t -> ([],[],[t])) <$> parseTrait)
+
 parseClasses :: TParser r ([Interface],[Core],[Trait])
-parseClasses = parseTEitherList parseInterface parseCore parseTrait
+parseClasses = foldr (\(i,c,t) (is,cs,ts) -> (i++is,c++cs,t++ts)) ([],[],[]) <$> many parseClass
 
 parseModule :: TParser r Module
 parseModule = do

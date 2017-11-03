@@ -26,7 +26,7 @@ data Statement = Identifier String
                | Call Statement Statement
 
 instance Show Function where
-	show (Function sig body) = "   " ++ show sig ++ "\n" ++ showBlock 2 body
+    show (Function sig body) = "   " ++ show sig ++ "\n" ++ showBlock 2 body
 
 showBlock :: Int -> Block -> String
 showBlock i = unlines . map (showIndentedStatement i)
