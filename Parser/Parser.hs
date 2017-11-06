@@ -1,3 +1,4 @@
+{-# LANGUAGE Arrows #-}
 module Parser.Parser  where
 
 import Control.Applicative
@@ -42,22 +43,25 @@ consumeNewlines :: TParser t ()
 consumeNewlines = many (consumeSingle (Lexer.Indentation 0)) >> noop
 
 identifier :: TParser r String
-identifier = (\(Lexer.Identifier i) -> i) <$> cParse (Lexer.isIdentifier . head) (tokenParse id) ""
+identifier = (\(Lexer.Identifier i) -> i) <$> cParse ((&&) <$> not.null <*> Lexer.isIdentifier . head) (tokenParse id) ""
+
+noComOperator :: TParser r String
+noComOperator = (\(Lexer.Operator o) -> o) <$> cParse ((&&) <$> ((&&) <$> not.null <*> Lexer.isOperator . head) <*> (\((Lexer.Operator o):_) -> head o /= ',')) (tokenParse id) ""
 
 operator :: TParser r String
-operator = (\(Lexer.Operator o) -> o) <$> cParse (Lexer.isOperator . head) (tokenParse id) ""
+operator = (\(Lexer.Operator o) -> o) <$> cParse ((&&) <$> not.null <*> Lexer.isOperator . head) (tokenParse id) ""
 
 int :: TParser r Integer
-int = (\(Lexer.Integer i) -> i) <$> cParse (Lexer.isInteger . head) (tokenParse id) ""
+int = (\(Lexer.Integer i) -> i) <$> cParse ((&&) <$> not.null <*> Lexer.isInteger . head) (tokenParse id) ""
 
 char :: TParser r Char
-char = (\(Lexer.Char c) -> c) <$> cParse (Lexer.isChar . head) (tokenParse id) ""
+char = (\(Lexer.Char c) -> c) <$> cParse ((&&) <$> not.null <*> Lexer.isChar . head) (tokenParse id) ""
 
 string :: TParser r String
-string = (\(Lexer.String c) -> c) <$> cParse (Lexer.isString . head) (tokenParse id) ""
+string = (\(Lexer.String c) -> c) <$> cParse ((&&) <$> not.null <*> Lexer.isString . head) (tokenParse id) ""
 
 float :: TParser r Double
-float = (\(Lexer.Float f) -> f) <$> cParse (Lexer.isFloat . head) (tokenParse id) ""
+float = (\(Lexer.Float f) -> f) <$> cParse ((&&) <$> not.null <*> Lexer.isFloat . head) (tokenParse id) ""
 
 parseType :: TParser r Type
 parseType = parseFunctionType <|> parseNonFuncType
@@ -118,7 +122,7 @@ parseStatementT :: TParser r Statement
 parseStatementT = parseReturn <|> parseIfE <|> parseIf <|> parseWhile <|> parseFor <|> parseMapLiteral <|> parseTupleLiteral <|> parseArrayLiteral <|> parseCharLiteral <|> parseStringLiteral <|> parseTemplatedIdentifier <|> parseIdentifier <|> parseFloatLiteral <|> parseIntLiteral
 
 parseStatement :: TParser r Statement
-parseStatement = (Call <$> parseStatementT <*> parseStatement) <|> ((\s1 o s2 -> Operator o s1 s2) <$> parseStatementT <*> operator <*> parseStatement) <|> parseStatementT
+parseStatement = (Call <$> parseStatementT <*> parseStatement) <|> ((\s1 o s2 -> Operator o s1 s2) <$> parseStatementT <*> noComOperator <*> parseStatement) <|> parseStatementT
 
 parseTemplatedIdentifier :: TParser r Statement
 parseTemplatedIdentifier = TemplatedIdentifier <$> identifier <*> (consumeSOp Lexer.LParen >> parseStatement << consumeSOp Lexer.RParen)
@@ -194,7 +198,14 @@ parseModule = do
     consumeNewlines
     imps <- many parseImport
     (ints,cs,ts) <- parseClasses
+    eoi
     return $ Module n imps ints cs ts
 
+fullParser :: Parser r String Module
+fullParser = proc s -> do
+    toks <- Lexer.tokenizer -< s
+    mod <- parseModule -< toks
+    returnA -< mod
+
 parseFile :: String -> Either String Module
-parseFile s = doParse (Lexer.tokenizer >>> parseModule) (s ++ "\n")
+parseFile = doParse fullParser . (++"\n")
