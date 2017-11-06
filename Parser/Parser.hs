@@ -1,6 +1,7 @@
 module Parser.Parser  where
 
 import Control.Applicative
+import Control.Arrow
 import Data.List
 import Data.Maybe
 
@@ -195,5 +196,5 @@ parseModule = do
     (ints,cs,ts) <- parseClasses
     return $ Module n imps ints cs ts
 
-parseFile :: String -> Maybe Module
-parseFile s = parse Lexer.tokenizer (s ++ "\n") (\ts -> parse parseModule ts Just (const Nothing)) (const Nothing)
+parseFile :: String -> Either String Module
+parseFile s = doParse (Lexer.tokenizer >>> parseModule) (s ++ "\n")
