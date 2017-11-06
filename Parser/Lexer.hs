@@ -16,8 +16,9 @@ data SpecialOperator = LParen | RParen deriving (Eq, Show)
 
 data Token = Identifier String | Integer Integer | String String | Char Char | Float Double | Operator String | SpecialOperator SpecialOperator | Indentation Int | Keyword Keyword deriving (Eq, Show)
 
-type STokenizer r = Parser r Char Token
-type Tokenizer r = Parser r Char [Token]
+type CharRewriter r = Parser r [Char] Char
+type STokenizer r = Parser r [Char] Token
+type Tokenizer r = Parser r [Char] [Token]
 
 concat :: Tokenizer r -> Tokenizer r -> Tokenizer r
 concat l r = (++) <$> l <*> r
@@ -31,10 +32,10 @@ tokenizeIdentifier = Identifier <$> some (cParse (\s -> not (null s) && isLetter
 tokenizeInteger :: STokenizer r
 tokenizeInteger = Integer . read <$> some (cParse (\s -> not (null s) && isDigit (head s)) (tokenParse id) "Expected digit")
 
-parseEscapedChar :: Parser r Char Char
+parseEscapedChar :: CharRewriter r
 parseEscapedChar = consume "\\" >> tokenParse escape
 
-parseChar :: Parser r Char Char
+parseChar :: CharRewriter r
 parseChar = parseEscapedChar <|> tokenParse id
 
 tokenizeString :: STokenizer r
@@ -54,7 +55,7 @@ tokenizeSpecialOperator = (const (SpecialOperator LParen) <$> consume "(")
                       <|> (const (SpecialOperator RParen) <$> consume ")") 
 
 tokenizeIndentation :: STokenizer r
-tokenizeIndentation = Indentation . length <$> (consume "\n" >> many (consume " " <|> consume "\t") << cPeek (/= "\n")) 
+tokenizeIndentation = Indentation . length <$> (consume "\n" >> many (consume " " <|> consume "\t") << peek (/= "\n") "Expected no newline!") 
 
 tokenizeKeyword :: STokenizer r
 tokenizeKeyword = (const (Keyword Module) <$> consume "module") 

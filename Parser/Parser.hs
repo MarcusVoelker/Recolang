@@ -17,7 +17,7 @@ import CodeModel.Module
 import CodeModel.Signature
 import CodeModel.Type
 
-type TParser r t = Parser r Lexer.Token t
+type TParser r t = Parser r [Lexer.Token] t
 
 consumePartialOp :: String -> TParser t ()
 consumePartialOp s = cParse 
